@@ -1,0 +1,6 @@
+packaging
+wheel
+torch
+supervision
+flash-attn
+huggingface_hub

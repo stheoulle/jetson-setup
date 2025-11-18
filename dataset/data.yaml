@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 1
+names: ['Code']
+
+roboflow:
+  workspace: poc-qistl
+  project: innovation-kwwcn
+  version: 4
+  license: MIT
+  url: https://universe.roboflow.com/poc-qistl/innovation-kwwcn/dataset/4
