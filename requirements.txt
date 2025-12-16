@@ -1,6 +1,6 @@
-packaging
-wheel
 torch
+wheel
 supervision
-flash-attn
 huggingface_hub
+ultralytics 
+opencv-python

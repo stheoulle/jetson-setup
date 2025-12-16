@@ -1,17 +1,16 @@
+# train_yolo.py
 import torch
 from ultralytics import YOLO
 
+model = YOLO("yolo12s.pt")
 
-
-# Load the YOLO model (this is for YOLOv8)
-model = YOLO('yolo12s.pt')
-
-# Set device to GPU if available
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+device = "cuda" if torch.cuda.is_available() else "cpu"
 model.to(device)
 print(f"Using device: {device}")
 
-# Start training
-results = model.train(data='dataset/data.yaml', epochs=20)
+results = model.train(
+    data="dataset/data.yaml",
+    epochs=20
+)
 
-print(f"Training completed! Results: {results}")
+print("Training completed")
