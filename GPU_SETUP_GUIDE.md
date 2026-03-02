@@ -1,7 +1,20 @@
 # GPU Setup Guide for Jetson Orin - Standalone Setup
 
+## ⚠️ IMPORTANT: Current Status
+
+**GPU training on Jetson Orin with standalone PyTorch is challenging due to:**
+1. Compute Capability 8.7 not fully supported by standard PyTorch wheels
+2. NVIDIA Jetson-specific wheels have many missing dependencies (cuDNN8, libcusparseLt)
+3. Standard PyTorch wheels don't include Jetson GPU kernels
+
+**RECOMMENDED**: Use Docker container (`dustynv/l4t-pytorch:r36.4.0`) for reliable GPU acceleration.
+
+**CURRENT SETUP**: CPU-only PyTorch 2.0.1 - Works reliably but slower training.
+
+---
+
 ## Overview
-This guide shows how to set up PyTorch with GPU acceleration on a Jetson Orin device **without Docker**.
+This guide documents attempts to set up PyTorch with GPU acceleration on Jetson Orin **without Docker**.
 
 ## System Information
 - **Device**: Jetson Orin (Compute Capability 8.7)
@@ -10,9 +23,9 @@ This guide shows how to set up PyTorch with GPU acceleration on a Jetson Orin de
 - **Driver**: NVIDIA 540.4.0
 
 ## What You Need
-✓ PyTorch 2.12.0.dev (CUDA 12.6 compatible)
+✓ PyTorch 2.0.1 (CPU-only but stable)
 ✓ CUDA 12.6 toolkit  
-✓ CUDA runtime libraries  
+✓ cuDNN 9
 ✓ Python 3.10 environment via mamba
 
 ## Setup Steps Completed
@@ -23,29 +36,43 @@ mamba create -y -n pytorch-gpu python=3.10
 ```
 *Why Python 3.10?* PyTorch GPU wheels for aarch64 (ARM64) don't support Python 3.13 yet.
 
-### 2. **Installed PyTorch with CUDA 12.6 Support**
+### 2. **Installed PyTorch 2.0.1 (CPU-only for now)**
 ```bash
-mamba run -n pytorch-gpu pip install --upgrade torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu126
+mamba run -n pytorch-gpu pip install torch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 --index-url https://download.pytorch.org/whl/cu121
 ```
-This installs PyTorch nightly builds with full CUDA 12.6 support and all required libraries.
+⚠️ **Note**: This wheel doesn't detect GPU on Jetson due to missing CC 8.7 kernels.
 
 ### 3. **Installed CUDA Toolkit**
 ```bash
 sudo apt install -y cuda-toolkit
 ```
-This installed CUDA 12.6 to `/usr/local/cuda-12.6/` with all necessary libraries and development tools.
+Installed CUDA 12.6 to `/usr/local/cuda-12.6/`.
 
-### 4. **Configured Library Paths**
-CUDA libraries are located at:
+### 4. **Installed cuDNN 9**
+```bash
+sudo apt install -y cudnn9-cuda-12-6 libcudnn9-cuda-12
+sudo ln -sf /usr/lib/aarch64-linux-gnu/libcudnn.so.9 /usr/lib/aarch64-linux-gnu/libcudnn.so.8
+```
+
+### 5. **CUDA Library Locations**
 - `/usr/local/cuda-12.6/targets/aarch64-linux/lib/`
 - `/usr/lib/aarch64-linux-gnu/nvidia/`
 
 ## Usage
 
-### Quick Start
+### Quick Start (CPU Training)
 ```bash
 cd /home/laposte/jetson-setup
 mamba run -n pytorch-gpu python app.py
+```
+*Currently runs on CPU. Expect ~3-5x slower than GPU.*
+
+### GPU Training (Docker - Recommended)
+```bash
+sudo docker run --runtime nvidia --gpus all -it --rm \
+  -v $(pwd):/workspace \
+  dustynv/l4t-pytorch:r36.4.0 \
+  python /workspace/app.py
 ```
 
 ### Activate Environment Manually
@@ -100,10 +127,20 @@ If GPU memory allocation fails, `app.py` automatically falls back to CPU trainin
 - Batch size: 4
 - Image size: 416
 
+## Tested PyTorch Versions
+
+| Version | Source | CUDA Detected | GPU Works | Issues |
+|---------|--------|---------------|-----------|--------|
+| 2.0.1 | PyTorch Index | ❌ No | ❌ No | No Jetson kernels |
+| 2.12.0.dev | PyTorch Nightly | ✅ Yes | ❌ No | `no kernel image for CC 8.7` |
+| 2.4.0a0 | NVIDIA JP6.0 | - | ❌ No | Missing: libcudnn8, libcusparseLt.so.0 |
+
 ## Troubleshooting
 
 ### GPU Not Detected
-**Symptom**: `CUDA available: False`
+**Symptom**: `CUDA available: False` or `no kernel image available for execution on the device`
+
+**Root Cause**: Jetson Orin has Compute Capability 8.7, which is not included in standard PyTorch builds.
 
 **Check**:
 ```bash
@@ -133,24 +170,47 @@ mamba run -n pytorch-gpu pip install ultralytics opencv-python pyyaml
 
 ## Installation Commands Summary
 
-If you need to reinstall from scratch:
+### Current Working Setup (CPU-only)
 
 ```bash
 # 1. Create environment
 mamba create -y -n pytorch-gpu python=3.10
 
-# 2. Install PyTorch with GPU
-mamba run -n pytorch-gpu pip install torch torchvision torchaudio \
-    --index-url https://download.pytorch.org/whl/nightly/cu126
+# 2. Install PyTorch (CPU-only but stable)
+mamba run -n pytorch-gpu pip install torch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 \
+    --index-url https://download.pytorch.org/whl/cu121
 
 # 3. Install YOLO
 mamba run -n pytorch-gpu pip install ultralytics
 
-# 4. Install CUDA toolkit (if not already installed)
-sudo apt install -y cuda-toolkit
+# 4. Install CUDA toolkit
+sudo apt install -y cuda-toolkit cudnn9-cuda-12-6
 
-# 5. Run your script
+# 5. Run CPU training
 mamba run -n pytorch-gpu python app.py
+```
+
+### For GPU Support: Use Docker
+
+```bash
+# Tested and working GPU setup
+sudo docker run --runtime nvidia --gpus all -it --rm \
+  --network host --shm-size=8g \
+  -v $(pwd):/workspace \
+  -w /workspace \
+  dustynv/l4t-pytorch:r36.4.0 \
+  bash -c "pip install ultralytics && python app.py"
+```
+
+### Future: Build PyTorch from Source
+
+```bash
+# For advanced users: Build with CC 8.7 support
+git clone --recursive https://github.com/pytorch/pytorch
+cd pytorch
+export TORCH_CUDA_ARCH_LIST="8.7"
+python setup.py install
+# ⚠️ Takes 4-6 hours to compile on Jetson
 ```
 
 ## Performance Tips
