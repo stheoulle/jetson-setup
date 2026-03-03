@@ -1,0 +1,36 @@
+services:
+  yolo-inference:
+    image: dustynv/l4t-pytorch:r36.4.0
+    container_name: yolo-inference
+    runtime: nvidia
+    environment:
+      - DISPLAY=${DISPLAY}
+      - PIP_INDEX_URL=https://pypi.org/simple
+      - PIP_TRUSTED_HOST=""
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
+    volumes:
+      - ./:/workspace
+      - /tmp/argus_socket:/tmp/argus_socket
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    working_dir: /workspace
+    shm_size: 8g
+    mem_limit: 7G
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    network_mode: bridge
+    command: >
+      bash -c "
+        echo '📦 Installing dependencies (one-time setup)...' &&
+        pip install -q 'numpy<2.0' ultralytics &&
+        echo '✅ Container ready for inference!' &&
+        echo '📝 Use ./inference_simple.sh to run inference' &&
+        tail -f /dev/null
+      "
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
