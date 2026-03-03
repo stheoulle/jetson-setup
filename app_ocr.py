@@ -18,10 +18,7 @@ print(f"YOLO loaded on {device}")
 # ---------------------------
 # Load PaddleOCR
 # ---------------------------
-ocr = PaddleOCR(
-    lang="en",
-    use_textline_orientation=True  # replaces deprecated use_angle_cls
-)
+ocr = PaddleOCR(lang="en")
 
 # ---------------------------
 # Helper

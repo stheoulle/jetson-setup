@@ -20,7 +20,7 @@ if torch.cuda.is_available():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
     device = "cuda"
 else:
-    print("⚠️  GPU not detected - using CPU")
+    print("GPU not detected - using CPU")
     device = "cpu"
 
 print(f"Inference device: {device.upper()}")
@@ -28,7 +28,7 @@ print("=" * 70)
 
 # Parse arguments
 if len(sys.argv) < 2:
-    print("\n❌ Usage: python3 app_video_simple.py <video_file> [options]")
+    print("\nUsage: python3 app_video_simple.py <video_file> [options]")
     print("\nOptions:")
     print("  --conf FLOAT     Confidence threshold (default: 0.5)")
     print("  --imgsz INT      Inference size (default: 320)")
@@ -57,27 +57,27 @@ while i < len(sys.argv):
 
 video_path = Path(video_path)
 if not video_path.exists():
-    print(f"\n❌ Video not found: {video_path}")
+    print(f"\nVideo not found: {video_path}")
     sys.exit(1)
 
 model_path = Path("runs/detect/train22/weights/best.pt")
 if not model_path.exists():
-    print(f"\n❌ Model not found: {model_path}")
+    print(f"\nModel not found: {model_path}")
     sys.exit(1)
 
-print(f"\n📹 Input video: {video_path}")
-print(f"🤖 Model: {model_path}")
-print(f"📊 Confidence: {conf}")
-print(f"🎯 Image size: {imgsz}px")
+print(f"\nInput video: {video_path}")
+print(f"Model: {model_path}")
+print(f"Confidence: {conf}")
+print(f"Image size: {imgsz}px")
 print("=" * 70)
 
 # Clear GPU cache
 if device == "cuda":
     torch.cuda.empty_cache()
-    print("\n✅ GPU cache cleared")
+    print("\nGPU cache cleared")
 
 # Load model
-print("🔄 Loading model...")
+print("Loading model...")
 model = YOLO(str(model_path))
 
 # Set output directory
@@ -88,8 +88,8 @@ else:
     project = str(video_path.parent)
     name = f"{video_path.stem}_detected"
 
-print(f"💾 Output will be saved to: {Path(project) / name}")
-print("\n🎬 Starting video processing...\n")
+print(f"Output will be saved to: {Path(project) / name}")
+print("\nStarting video processing...\n")
 
 # Process video using YOLO's built-in predict with streaming
 # This is more memory-efficient than loading the entire video
@@ -110,8 +110,8 @@ try:
         batch=1,  # Process one frame at a time
     )
 except Exception as e:
-    print(f"\n❌ Error during video processing: {e}")
-    print("\n💡 Try using CPU instead:")
+    print(f"\nError during video processing: {e}")
+    print("\nTry using CPU instead:")
     print("   ./inference_cpu.sh vidéos/C0088.MP4")
     sys.exit(1)
 
@@ -124,7 +124,7 @@ for result in results:
         torch.cuda.empty_cache()
 
 print("\n" + "=" * 70)
-print(f"✅ Video inference completed!")
-print(f"📊 Processed {frame_count} frames")
-print(f"📁 Output saved in: {Path(project) / name}")
+print(f"Video inference completed!")
+print(f"Processed {frame_count} frames")
+print(f"Output saved in: {Path(project) / name}")
 print("=" * 70)

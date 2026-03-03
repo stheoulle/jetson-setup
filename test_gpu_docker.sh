@@ -1,7 +1,7 @@
 #!/bin/bash
 # Quick GPU Test with Docker
 
-echo "🔍 Testing GPU in Docker..."
+echo "Testing GPU in Docker..."
 echo ""
 
 sudo docker run --rm --gpus all dustynv/l4t-pytorch:r36.4.0 \
@@ -25,13 +25,13 @@ if torch.cuda.is_available():
         result = torch.matmul(x, x)
         torch.cuda.synchronize()
         elapsed = (time.time() - start) * 1000
-        print(f'✅ GPU computation successful! ({elapsed:.2f}ms)')
+        print(f'GPU computation successful! ({elapsed:.2f}ms)')
     except Exception as e:
-        print(f'❌ GPU computation failed: {e}')
+        print(f'GPU computation failed: {e}')
 else:
-    print('❌ GPU not available')
+    print('GPU not available')
 print('=' * 60)
 "
 
 echo ""
-echo "✅ GPU test completed!"
+echo "GPU test completed!"

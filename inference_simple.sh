@@ -29,15 +29,27 @@ fi
 
 # Check if container is running
 if ! docker compose ps | grep -q "yolo-inference.*running"; then
-    echo "⚠️  Container not running. Starting it now..."
+    echo "Container not running. Starting it now..."
     echo "    This will take a moment for first-time setup..."
     docker compose up -d
     echo ""
-    echo "⏳ Waiting for dependencies to install..."
-    sleep 10
+    echo "Waiting for dependencies to install..."
+    
+    # Wait for the container to finish installing dependencies
+    for i in {1..60}; do
+        if docker compose logs yolo-inference 2>/dev/null | grep -q "Container ready"; then
+            echo "Dependencies installed successfully!"
+            break
+        fi
+        sleep 1
+        if [ $i -eq 60 ]; then
+            echo "Timeout waiting for setup. Proceeding anyway..."
+        fi
+    done
+    echo ""
 fi
 
-echo "🎬 Starting video inference..."
+echo "Starting video inference..."
 echo ""
 
 # Run inference in the persistent container

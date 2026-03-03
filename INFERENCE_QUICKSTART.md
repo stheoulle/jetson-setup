@@ -2,7 +2,7 @@
 
 This setup uses Docker Compose to maintain a persistent container, eliminating the need to reinstall dependencies on every inference run.
 
-## 🚀 First Time Setup
+## First Time Setup
 
 Start the persistent container (installs dependencies once):
 
@@ -15,7 +15,7 @@ This will:
 - Install numpy and ultralytics (one time only)
 - Keep the container ready for inference
 
-## 🎬 Running Inference
+## Running Inference
 
 Once the container is running, use the inference script as before:
 
@@ -29,7 +29,7 @@ The script will automatically:
 - Start it if needed (with auto-install)
 - Execute inference immediately (no reinstall!)
 
-## 📊 Container Management
+## Container Management
 
 Check container status:
 ```bash
@@ -51,15 +51,15 @@ Restart the container:
  docker compose restart
 ```
 
-## 💡 Benefits
+## Benefits
 
-- ✅ No dependency reinstallation on each run
-- ✅ Faster inference execution
-- ✅ Same memory and GPU configuration
-- ✅ Container stays ready for multiple inference runs
-- ✅ Automatic startup if container is stopped
+- No dependency reinstallation on each run
+- Faster inference execution
+- Same memory and GPU configuration
+- Container stays ready for multiple inference runs
+- Automatic startup if container is stopped
 
-## 🔄 Updating Dependencies
+## Updating Dependencies
 
 If you need to update dependencies, restart the container:
 

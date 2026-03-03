@@ -21,7 +21,7 @@ if torch.cuda.is_available():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
     device = "cuda"
 else:
-    print("⚠️  GPU not detected - using CPU")
+    print("GPU not detected - using CPU")
     device = "cpu"
 
 print(f"Inference device: {device.upper()}")
@@ -54,39 +54,39 @@ def detect_video(video_path, model_path, output_path=None, conf=0.5, device="cud
     else:
         output_path = Path(output_path)
     
-    print(f"\n📹 Input video: {video_path}")
-    print(f"🤖 Model: {model_path}")
-    print(f"📊 Confidence threshold: {conf}")
-    print(f"🎯 Inference size: {imgsz}px")
-    print(f"💾 Output video: {output_path}")
+    print(f"\nInput video: {video_path}")
+    print(f"Model: {model_path}")
+    print(f"Confidence threshold: {conf}")
+    print(f"Inference size: {imgsz}px")
+    print(f"Output video: {output_path}")
     print("=" * 70)
     
     # Load model with memory optimization
-    print("\n🔄 Loading model...")
+    print("\nLoading model...")
     model = YOLO(str(model_path), task='detect')
     
     # Explicitly disable model fusion to save memory
     if hasattr(model.model, 'fuse'):
-        print("⚙️  Skipping model fusion for memory optimization")
+        print("Skipping model fusion for memory optimization")
     
     model.to(device)
     
     # Clear GPU cache before starting
     if device == "cuda":
         torch.cuda.empty_cache()
-        print("✅ GPU cache cleared")
+        print("GPU cache cleared")
     
     # Warm up with a small dummy image to initialize model properly
-    print("🔥 Warming up model...")
+    print("Warming up model...")
     import numpy as np
     dummy_img = np.zeros((imgsz, imgsz, 3), dtype=np.uint8)
     try:
         _ = model.predict(dummy_img, conf=conf, device=device, verbose=False, imgsz=imgsz)
         if device == "cuda":
             torch.cuda.empty_cache()
-        print("✅ Model ready")
+        print("Model ready")
     except Exception as e:
-        print(f"⚠️  Warmup failed (continuing anyway): {e}")
+        print(f"Warmup failed (continuing anyway): {e}")
     
     # Open video
     cap = cv2.VideoCapture(str(video_path))
@@ -151,9 +151,9 @@ def detect_video(video_path, model_path, output_path=None, conf=0.5, device="cud
     out.release()
     
     print("\n" + "=" * 70)
-    print(f"✅ Video inference completed!")
-    print(f"📊 Processed {frame_count} frames")
-    print(f"📁 Output saved: {output_path}")
+    print(f"Video inference completed!")
+    print(f"Processed {frame_count} frames")
+    print(f"Output saved: {output_path}")
     print("=" * 70)
     
     return str(output_path)

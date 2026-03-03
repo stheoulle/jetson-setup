@@ -1,10 +1,10 @@
 #!/bin/bash
 # GPU Training with Docker - Jetson Orin
 
-echo "🚀 Starting YOLO Training with GPU (Docker)"
+echo "Starting YOLO Training with GPU (Docker)"
 echo "============================================"
 echo "Container: dustynv/l4t-pytorch:r36.4.0"
-echo "GPU: Enabled ✅"
+echo "GPU: Enabled "
 echo "GPU Memory: Optimized for Jetson Orin"
 echo "============================================"
 echo ""
@@ -25,15 +25,15 @@ sudo docker run --rm --gpus all \
   -e PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128 \
   dustynv/l4t-pytorch:r36.4.0 \
   bash -c "
-    echo '📦 Installing Ultralytics YOLO with NumPy compatibility...'
+    echo 'Installing Ultralytics YOLO with NumPy compatibility...'
     pip install 'numpy<2.0' ultralytics
     echo ''
-    echo '🏋️  Starting training with GPU memory optimization...'
+    echo 'Starting training with GPU memory optimization...'
     echo ''
     python3 app.py
   "
 
 echo ""
 echo "============================================"
-echo "✅ Training completed!"
+echo "Training completed!"
 echo "============================================"

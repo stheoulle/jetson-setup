@@ -4,3 +4,5 @@ supervision
 huggingface_hub
 ultralytics 
 opencv-python
+numpy==1.26.4
+easyocr
