@@ -6,7 +6,7 @@ This document explains the steps to get PyTorch with CUDA working on a Jetson de
 
 ---
 
-## ✅ Final Working Docker Command
+## Final Working Docker Command
 
 The GPU-enabled PyTorch container can be launched with:
 

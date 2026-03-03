@@ -1,32 +1,45 @@
 #!/bin/bash
-# GPU Video Inference with OCR (EasyOCR) - Jetson Orin
-# Detects boxes, applies OCR to recognize 4-digit numbers, saves to CSV
+# GPU Live Stream Inference with OCR - Jetson Orin
+# Displays live camera feed with YOLO detection + OCR in real-time
+# Recognizes 4-digit numbers in detected regions
 # Uses EasyOCR for better Jetson compatibility
 
-echo "YOLO Video Inference with OCR - EasyOCR (Docker)"
+echo "YOLO Live Stream Inference with OCR - Real-time"
 echo "=============================================="
 echo "Container: dustynv/l4t-pytorch:r36.4.0"
-echo "GPU: Enabled "
+echo "GPU: Enabled"
 echo "Model: train22"
 echo "OCR: EasyOCR (Jetson optimized)"
 echo "=============================================="
 echo ""
 
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 <video_file> [OPTIONS]"
+    echo "Usage: $0 <stream_url> [OPTIONS]"
+    echo ""
+    echo "Stream URLs:"
+    echo "  rtsp://10.149.73.176:8080/h264.sdp"
+    echo "  rtsp://10.149.73.176:8080/h264_aac.sdp"
+    echo "  rtsp://10.149.73.176:8080/h264_opus.sdp"
+    echo "  rtsp://10.149.73.176:8080/h264_ulaw.sdp"
     echo ""
     echo "Options:"
     echo "  --conf FLOAT        Confidence threshold (default: 0.5)"
     echo "  --imgsz INT         Inference size (default: 320)"
-    echo "  --output-csv FILE   Output CSV file (default: detections.csv)"
-    echo "  --save-video        Save annotated video with OCR results"
+    echo "  --output-csv FILE   Save detections to CSV"
+    echo "  --output-dir DIR    Save frames to directory (headless mode)"
+    echo "  --headless          Headless mode (no display, only stats)"
     echo "  --frame-skip INT    Process every Nth frame (default: 1)"
     echo "  --ocr-cpu           Force OCR to use CPU"
     echo ""
     echo "Examples:"
-    echo "  $0 video.mp4"
-    echo "  $0 video.mp4 --output-csv results.csv --save-video"
-    echo "  $0 video.mp4 --conf 0.7 --frame-skip 5 --ocr-cpu"
+    echo "  $0 rtsp://10.149.73.176:8080/h264.sdp"
+    echo "  $0 rtsp://10.149.73.176:8080/h264.sdp --headless"
+    echo "  $0 rtsp://10.149.73.176:8080/h264.sdp --output-dir ./frames"
+    echo "  $0 rtsp://10.149.73.176:8080/h264.sdp --output-csv detections.csv --frame-skip 2"
+    echo ""
+    echo "Controls during streaming:"
+    echo "  q   - Quit the stream (display mode only)"
+    echo "  s   - Save current frame with detections (display mode only)"
     echo ""
     echo "Note: Make sure to run 'docker compose up -d' first!"
     exit 1
@@ -42,8 +55,8 @@ if ! docker compose ps | grep -q "yolo-inference.*running"; then
     
     # Wait for the container to finish installing dependencies
     for i in {1..60}; do
-        if docker compose logs yolo-inference 2>/dev/null | grep -q "Container ready"; then
-            echo "Dependencies installed successfully!"
+        if docker compose logs yolo-inference 2>/dev/null | grep -q "already running"; then
+            echo "Container is ready!"
             break
         fi
         sleep 1
@@ -54,9 +67,9 @@ if ! docker compose ps | grep -q "yolo-inference.*running"; then
     echo ""
 fi
 
-echo "Starting OCR video processing with EasyOCR..."
-echo "   This will process each frame with YOLO + OCR"
-echo "   Results will be saved to CSV with detection counts"
+echo "Starting live stream processing with OCR..."
+echo "   This will stream and process frames in real-time"
+echo "   Detection results displayed on screen"
 echo ""
 
 echo "Checking Python dependencies in container..."
@@ -102,23 +115,26 @@ PY
 fi
 echo ""
 
-# Run the Python script inside the container
-docker compose exec yolo-inference python3 app_video_ocr_easy.py "$@"
+# Run the Python script inside the container with display support
+# Note: For X11 forwarding, make sure to set up display properly
+docker compose exec yolo-inference python3 app_live_ocr.py "$@"
 
 EXIT_CODE=$?
 
 if [ $EXIT_CODE -eq 0 ]; then
     echo ""
-    echo "Processing complete! Check your CSV file for results."
+    echo "Stream closed. Processing complete!"
 else
     echo ""
     echo "Processing failed with exit code $EXIT_CODE"
     echo ""
     echo "Troubleshooting:"
-    echo "   - Make sure the video file path is correct"
+    echo "   - No display available? Use: $0 $1 --headless"
+    echo "   - Want to save frames? Use: $0 $1 --output-dir ./frames"
+    echo "   - Check stream URL: $1"
+    echo "   - Verify network: ping 10.149.73.176"
     echo "   - Check numpy/easyocr: docker compose exec yolo-inference python3 -c 'import numpy, easyocr; print(numpy.__version__)'"
     echo "   - Reinstall deps: docker compose exec yolo-inference pip3 install --no-cache-dir \"numpy==1.26.4\" easyocr"
-    echo "   - Try CPU mode: $0 <video> --ocr-cpu"
     echo "   - View container logs: docker compose logs yolo-inference"
 fi
 
