@@ -2,6 +2,8 @@
 
 This guide covers the new real-time live stream processing script that combines YOLO detection with EasyOCR text recognition.
 
+For ESP32-CAM setup (to replace phone live feed), see `ESP32_CAM_LIVE_FEED_README.md`.
+
 ## Files Created
 
 - **app_live_ocr.py** - Python script for live stream YOLO + OCR processing

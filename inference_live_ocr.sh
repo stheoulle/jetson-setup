@@ -17,6 +17,8 @@ if [ $# -lt 1 ]; then
     echo "Usage: $0 <stream_url> [OPTIONS]"
     echo ""
     echo "Stream URLs:"
+    echo "  http://172.20.10.9/"
+    echo "  http://172.20.10.9:81/stream"
     echo "  rtsp://10.149.73.176:8080/h264.sdp"
     echo "  rtsp://10.149.73.176:8080/h264_aac.sdp"
     echo "  rtsp://10.149.73.176:8080/h264_opus.sdp"
@@ -29,9 +31,13 @@ if [ $# -lt 1 ]; then
     echo "  --output-dir DIR    Save frames to directory (headless mode)"
     echo "  --headless          Headless mode (no display, only stats)"
     echo "  --frame-skip INT    Process every Nth frame (default: 1)"
+    echo "  --cpu               Force CPU mode (recommended if GPU out of memory)"
     echo "  --ocr-cpu           Force OCR to use CPU"
     echo ""
     echo "Examples:"
+    echo "  $0 http://172.20.10.9/"
+    echo "  $0 http://172.20.10.9/ --headless"
+    echo "  $0 http://172.20.10.9/ --output-dir ./frames"
     echo "  $0 rtsp://10.149.73.176:8080/h264.sdp"
     echo "  $0 rtsp://10.149.73.176:8080/h264.sdp --headless"
     echo "  $0 rtsp://10.149.73.176:8080/h264.sdp --output-dir ./frames"
@@ -44,6 +50,9 @@ if [ $# -lt 1 ]; then
     echo "Note: Make sure to run 'docker compose up -d' first!"
     exit 1
 fi
+
+# Extract host from stream URL for troubleshooting hints
+STREAM_HOST=$(echo "$1" | sed -E 's|^[a-zA-Z]+://||' | cut -d/ -f1 | cut -d: -f1)
 
 # Check if container is running
 if ! docker compose ps | grep -q "yolo-inference.*running"; then
@@ -78,6 +87,7 @@ import sys
 import numpy as np
 import torch
 import easyocr
+import requests
 
 major = int(np.__version__.split('.')[0])
 if major >= 2:
@@ -88,10 +98,10 @@ print("ok")
 PY
 then
     echo "Missing or incompatible OCR dependencies detected"
-    echo "Installing compatible versions (numpy==1.26.4, easyocr)..."
-    if ! docker compose exec yolo-inference pip3 install --no-cache-dir "numpy==1.26.4" easyocr; then
+    echo "Installing compatible versions (numpy==1.26.4, easyocr, requests)..."
+    if ! docker compose exec yolo-inference pip3 install --no-cache-dir "numpy==1.26.4" easyocr requests; then
         echo "Failed to install dependencies in container"
-        echo "Try manually: docker compose exec yolo-inference pip3 install --no-cache-dir \"numpy==1.26.4\" easyocr"
+        echo "Try manually: docker compose exec yolo-inference pip3 install --no-cache-dir \"numpy==1.26.4\" easyocr requests"
         exit 1
     fi
 
@@ -100,6 +110,7 @@ then
 import numpy as np
 import torch
 import easyocr
+import requests
 major = int(np.__version__.split('.')[0])
 assert major < 2, np.__version__
 torch.from_numpy(np.zeros((1,), dtype=np.float32))
@@ -129,12 +140,15 @@ else
     echo "Processing failed with exit code $EXIT_CODE"
     echo ""
     echo "Troubleshooting:"
+    echo "   - GPU out of memory? Use: $0 $1 --cpu"
     echo "   - No display available? Use: $0 $1 --headless"
     echo "   - Want to save frames? Use: $0 $1 --output-dir ./frames"
     echo "   - Check stream URL: $1"
-    echo "   - Verify network: ping 10.149.73.176"
-    echo "   - Check numpy/easyocr: docker compose exec yolo-inference python3 -c 'import numpy, easyocr; print(numpy.__version__)'"
-    echo "   - Reinstall deps: docker compose exec yolo-inference pip3 install --no-cache-dir \"numpy==1.26.4\" easyocr"
+    if [ -n "$STREAM_HOST" ]; then
+        echo "   - Verify network: ping $STREAM_HOST"
+    fi
+    echo "   - Check numpy/easyocr/requests: docker compose exec yolo-inference python3 -c 'import numpy, easyocr, requests; print(numpy.__version__)'"
+    echo "   - Reinstall deps: docker compose exec yolo-inference pip3 install --no-cache-dir \"numpy==1.26.4\" easyocr requests"
     echo "   - View container logs: docker compose logs yolo-inference"
 fi
 

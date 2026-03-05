@@ -48,3 +48,10 @@ Run the vidéo inference on a smaller GPU that fallsbak to cpu if GPU is still n
 # Larger inference size (if it works)
 ./inference_simple.sh vidéos/C0088.MP4 --imgsz 416
 ```
+
+
+ESP32-CAM (http://172.20.10.9/capture)
+   ↓ HTTP GET with session reuse
+HTTPCaptureSource.read()
+   ↓ JPEG decode
+NumPy array → YOLO inference → OCR
