@@ -55,3 +55,7 @@ ESP32-CAM (http://172.20.10.9/capture)
 HTTPCaptureSource.read()
    ↓ JPEG decode
 NumPy array → YOLO inference → OCR
+
+
+pio device monitor on laposte laptop
+all 3 connected to iPhone
