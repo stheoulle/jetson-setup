@@ -78,7 +78,7 @@ if len(sys.argv) < 2:
     sys.exit(1)
 
 input_source = sys.argv[1]
-conf = 0.5
+conf = 0.3
 imgsz = 256
 output_csv = None
 save_video = False
@@ -388,8 +388,8 @@ print(f"Stream info: {frame_width}x{frame_height} @ {fps}fps")
 # =============================================================================
 # GLOBAL SHARED STATE
 # =============================================================================
-capture_queue = queue.Queue(maxsize=10)
-yolo_queue = queue.Queue(maxsize=10)
+capture_queue = queue.Queue(maxsize=30)
+yolo_queue = queue.Queue(maxsize=30)
 stop_event = threading.Event()
 detection_counts = defaultdict(int)
 stats_lock = threading.Lock()
@@ -469,6 +469,11 @@ def yolo_inference(model, device, capture_queue, yolo_queue, conf, imgsz, stop_e
             local_processed += 1
             with stats_lock:
                 processed_count = local_processed
+            
+            # Debug: Print detection count every 25 frames
+            if local_processed % 25 == 0:
+                num_detections = sum(len(r.boxes) for r in results)
+                print(f"[YOLO] Processed {local_processed} frames | Latest batch: {num_detections} objects detected")
             
             # Push results to OCR queue
             try:
@@ -605,13 +610,12 @@ def ocr_processing(reader, yolo_queue, detection_counts, stop_event,
         cv2.putText(display_frame, f"Unique #s: {unique_count}", 
                    (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
         
-        # Save frame to directory if requested
-        if output_dir:
+        # Save every 100th frame to directory if requested
+        if output_dir and frame_id % 100 == 0:
             try:
                 frame_file = Path(output_dir) / f"frame_{frame_id:06d}.jpg"
                 cv2.imwrite(str(frame_file), display_frame)
-                if frame_id % 100 == 0:
-                    print(f"[OCR] Saved frame {frame_id} to {output_dir}")
+                print(f"[OCR] Saved frame {frame_id} to {output_dir}")
             except Exception as e:
                 print(f"[OCR] Error saving frame: {e}")
         
