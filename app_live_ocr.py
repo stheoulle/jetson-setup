@@ -15,13 +15,16 @@ from pathlib import Path
 from ultralytics import YOLO
 import easyocr
 import sys
+import subprocess
+import os
 from collections import defaultdict
 from datetime import datetime
-from urllib.parse import urlparse
-import requests
 import time
 import threading
 import queue
+import gc
+import signal
+
 
 try:
     import numpy as np
@@ -51,14 +54,18 @@ print("=" * 70)
 
 # Parse arguments
 if len(sys.argv) < 2:
-    print("\nUsage: python3 app_live_ocr.py <stream_url> [options]")
-    print("\nExample stream URLs:")
-    print("  http://172.20.10.9/              (ESP32-CAM, auto-uses /capture)")
-    print("  rtsp://10.149.73.176:8080/h264.sdp")
-    print("  rtsp://10.149.73.176:8080/h264_aac.sdp")
+    print("\nUsage: python3 app_live_ocr.py <input_source> [options]")
+    print("\nExample input sources:")
+    print("  imx477                           (Arducam IMX477 on CSI, sensor-id=0)")
+    print("  rtsp://<ip>:<port>/stream")
+    print("  /path/to/video.mp4")
     print("\nOptions:")
     print("  --conf FLOAT        Confidence threshold (default: 0.5)")
     print("  --imgsz INT         Inference size (default: 320)")
+    print("  --sensor-id INT     IMX477 CSI sensor-id (default: 0)")
+    print("  --capture-width INT IMX477 capture width (default: 1280)")
+    print("  --capture-height INT IMX477 capture height (default: 720)")
+    print("  --capture-fps INT   IMX477 capture fps (default: 30)")
     print("  --output-csv FILE   Save detections to CSV (default: no save)")
     print("  --frame-skip INT    Process every Nth frame (default: 1)")
     print("  --cpu               Force CPU mode (no GPU for YOLO or OCR)")
@@ -70,7 +77,7 @@ if len(sys.argv) < 2:
     print("  s                   Save current frame with detections")
     sys.exit(1)
 
-stream_url = sys.argv[1]
+input_source = sys.argv[1]
 conf = 0.5
 imgsz = 256
 output_csv = None
@@ -80,6 +87,10 @@ ocr_gpu = True
 output_dir = None
 headless = False
 force_cpu = False
+sensor_id = 0
+capture_width = 1280
+capture_height = 720
+capture_fps = 30
 
 # Parse optional arguments
 i = 2
@@ -89,6 +100,18 @@ while i < len(sys.argv):
         i += 2
     elif sys.argv[i] == '--imgsz' and i + 1 < len(sys.argv):
         imgsz = int(sys.argv[i + 1])
+        i += 2
+    elif sys.argv[i] == '--sensor-id' and i + 1 < len(sys.argv):
+        sensor_id = int(sys.argv[i + 1])
+        i += 2
+    elif sys.argv[i] == '--capture-width' and i + 1 < len(sys.argv):
+        capture_width = int(sys.argv[i + 1])
+        i += 2
+    elif sys.argv[i] == '--capture-height' and i + 1 < len(sys.argv):
+        capture_height = int(sys.argv[i + 1])
+        i += 2
+    elif sys.argv[i] == '--capture-fps' and i + 1 < len(sys.argv):
+        capture_fps = int(sys.argv[i + 1])
         i += 2
     elif sys.argv[i] == '--output-csv' and i + 1 < len(sys.argv):
         output_csv = sys.argv[i + 1]
@@ -158,11 +181,14 @@ if not model_path.exists():
     print(f"\nModel not found: {model_path}")
     sys.exit(1)
 
-print(f"\nInput stream: {stream_url}")
 print(f"Model: {model_path}")
 print(f"Inference device: {device.upper()}")
 print(f"Confidence: {conf}")
 print(f"Image size: {imgsz}px")
+print(f"Input source: {input_source}")
+if input_source.lower() in ("imx477", "arducam", "arducam-imx477", "csi"):
+    print(f"IMX477 sensor-id: {sensor_id}")
+    print(f"IMX477 capture: {capture_width}x{capture_height} @ {capture_fps}fps")
 print(f"Output CSV: {output_csv if output_csv else 'None (no save)'}")
 print(f"Output frames: {output_dir if output_dir else 'None (display mode)'}")
 print(f"Frame skip: {frame_skip}")
@@ -217,136 +243,147 @@ def extract_4digit(text):
     return None
 
 
-class HTTPCaptureSource:
-    """Capture frames from ESP32-CAM /capture endpoint using HTTP polling."""
-    
-    def __init__(self, base_url, timeout=2):
-        self.session = requests.Session()
-        self.base_url = base_url.rstrip('/')
-        self.timeout = timeout
-        self.capture_url = f"{self.base_url}/capture"
-        self.frame_count = 0
-        self._test_connection()
-    
-    def _test_connection(self):
-        """Test if the capture endpoint is accessible."""
-        try:
-            r = self.session.get(self.capture_url, timeout=self.timeout)
-            r.raise_for_status()
-        except Exception as e:
-            raise ConnectionError(f"Cannot connect to {self.capture_url}: {e}")
-    
-    def read(self):
-        """Read a frame from the camera (mimics cv2.VideoCapture.read())."""
-        try:
-            r = self.session.get(self.capture_url, timeout=self.timeout)
-            if r.status_code != 200:
-                return False, None
-            
-            img_array = np.frombuffer(r.content, np.uint8)
-            frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-            
-            if frame is None:
-                return False, None
-            
-            self.frame_count += 1
-            return True, frame
-            
-        except Exception as e:
-            return False, None
-    
-    def release(self):
-        """Close the session."""
-        self.session.close()
-    
-    def get(self, prop):
-        """Stub for compatibility with cv2.VideoCapture interface."""
-        if prop == cv2.CAP_PROP_FPS:
-            return 10  # Typical ESP32-CAM FPS
-        elif prop == cv2.CAP_PROP_FRAME_WIDTH:
-            return 640  # Default, will be updated from first frame
-        elif prop == cv2.CAP_PROP_FRAME_HEIGHT:
-            return 480
-        return 0
+def build_imx477_pipeline(sensor_id, width, height, fps):
+    return (
+        f"nvarguscamerasrc sensor-id={sensor_id} ! "
+        f"video/x-raw(memory:NVMM), width={width}, height={height}, framerate={fps}/1 ! "
+        "nvvidconv ! "
+        "video/x-raw, format=BGRx ! "
+        "videoconvert ! "
+        "video/x-raw, format=BGR ! "
+        "appsink drop=true max-buffers=1 sync=false"
+    )
 
 
-def open_http_capture(base_url):
-    """Try opening HTTP capture endpoint for ESP32-CAM."""
-    parsed = urlparse(base_url)
-    base = f"{parsed.scheme}://{parsed.netloc}"
-    
-    # Try /capture first (ESP32-CAM standard)
+def check_gstreamer_available():
+    """Check if GStreamer is available via gst-inspect."""
     try:
-        print(f"Trying ESP32-CAM capture endpoint: {base}/capture")
-        source = HTTPCaptureSource(base)
-        return source, f"{base}/capture"
-    except Exception as e:
-        print(f"   Failed: {e}")
-        return None, None
+        result = subprocess.run(
+            ["gst-inspect-1.0", "nvarguscamerasrc"],
+            capture_output=True, timeout=2
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
 
 
-def open_rtsp_stream(stream_url):
-    """Try opening RTSP stream with VideoCapture."""
-    print(f"Trying RTSP stream: {stream_url}")
-    cap = cv2.VideoCapture(stream_url)
+def list_v4l2_devices():
+    """List available V4L2 camera devices."""
+    try:
+        result = subprocess.run(
+            ["v4l2-ctl", "--list-devices"],
+            capture_output=True, text=True, timeout=2
+        )
+        if result.returncode == 0:
+            return result.stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
+def open_imx477_stream(sensor_id, width, height, fps):
+    """Open Arducam IMX477 CSI stream via GStreamer."""
+    pipeline = build_imx477_pipeline(sensor_id, width, height, fps)
+    print(f"Trying IMX477 CSI camera (sensor-id={sensor_id})")
+
+    # Check if GStreamer nvarguscamerasrc is available
+    use_gstreamer = check_gstreamer_available()
+    if not use_gstreamer:
+        print("  ⚠ Warning: nvarguscamerasrc not found in GStreamer plugins")
+        print("    Falling back to V4L2 device capture (/dev/videoN)")
+    else:
+        cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+
+        if cap.isOpened():
+            ok, frame = cap.read()
+            if ok and frame is not None:
+                actual_height, actual_width = frame.shape[:2]
+                print(f"  ✓ IMX477 opened via GStreamer, resolution: {actual_width}x{actual_height}")
+                return cap, f"imx477(sensor-id={sensor_id},backend=gstreamer)"
+
+        print("  ✗ GStreamer pipeline failed to open")
+        print(f"    Pipeline string: {pipeline[:100]}...")
+        cap.release()
+
+    # Fallback path for containers where OpenCV lacks GStreamer support.
+    # Sensor-id 0 -> /dev/video0, sensor-id 1 -> /dev/video1, etc.
+    v4l2_device = f"/dev/video{sensor_id}"
+    print(f"  Trying V4L2 fallback: {v4l2_device}")
+    cap = cv2.VideoCapture(v4l2_device, cv2.CAP_V4L2)
+    if cap.isOpened():
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        cap.set(cv2.CAP_PROP_FPS, fps)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+        ok, frame = cap.read()
+        if ok and frame is not None:
+            actual_height, actual_width = frame.shape[:2]
+            print(f"  ✓ IMX477 opened via V4L2, resolution: {actual_width}x{actual_height}")
+            return cap, f"imx477(sensor-id={sensor_id},backend=v4l2)"
+
+    print("  ✗ V4L2 fallback failed")
+    cap.release()
+
+    # Try to get more diagnostic info
+    v4l2_devices = list_v4l2_devices()
+    if v4l2_devices:
+        print(f"    Available V4L2 devices:\n{v4l2_devices}")
+
+    print("  Troubleshooting:")
+    print("    - Check camera: v4l2-ctl --list-devices")
+    print("    - Verify device exists in container: ls -l /dev/video*")
+    print("    - If using GStreamer path: gst-inspect-1.0 nvarguscamerasrc")
+    print("    - Ensure argus_socket mounted in Docker: /tmp/argus_socket")
+    return None, None
+
+
+def open_generic_stream(source):
+    """Open RTSP/HTTP/file stream using OpenCV VideoCapture."""
+    print(f"Trying generic stream source: {source}")
+    cap = cv2.VideoCapture(source)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    
+
     if cap.isOpened():
         ok, _ = cap.read()
         if ok:
-            return cap, stream_url
-    
+            return cap, source
+
     cap.release()
     return None, None
 
 
-def open_stream(input_url):
-    """Open stream - tries ESP32-CAM /capture for HTTP, VideoCapture for RTSP."""
-    parsed = urlparse(input_url)
-    
-    # For HTTP/HTTPS URLs, try ESP32-CAM /capture endpoint
-    if parsed.scheme in ("http", "https"):
-        cap, url = open_http_capture(input_url)
-        if cap:
-            return cap, url
-        print("   HTTP capture failed, trying VideoCapture as fallback...")
-    
-    # For RTSP or if HTTP capture failed, use VideoCapture
-    return open_rtsp_stream(input_url)
+def open_stream(source, sensor_id, width, height, fps):
+    """Open input source with IMX477 support and generic fallback."""
+    if source.lower() in ("imx477", "arducam", "arducam-imx477", "csi"):
+        return open_imx477_stream(sensor_id, width, height, fps)
+    return open_generic_stream(source)
 
 
 # Open live stream
-print("\nConnecting to stream...")
-cap, resolved_stream_url = open_stream(stream_url)
+print("\nConnecting to input source...")
+cap, resolved_stream_url = open_stream(input_source, sensor_id, capture_width, capture_height, capture_fps)
 
 if cap is None:
-    print(f"\nFailed to open stream from: {stream_url}")
+    print(f"\nFailed to open source: {input_source}")
     print("\nTroubleshooting:")
-    print("  - For ESP32-CAM: Ensure camera is accessible at http://<ip>/capture")
-    print("  - For RTSP: Check the stream URL format (rtsp://...)")
-    print("  - Test connectivity: ping <camera-ip>")
+    print("  - For IMX477: verify cable seating/orientation and sensor-id (--sensor-id 0 or 1)")
+    print("  - For IMX477: check camera with 'v4l2-ctl --list-devices'")
+    print("  - For network streams: verify URL and connectivity")
+    print("  - For files: confirm path exists and codec is supported by OpenCV")
     sys.exit(1)
 
-if resolved_stream_url != stream_url:
+if resolved_stream_url != input_source:
     print(f"Connected using: {resolved_stream_url}")
 else:
-    print("Stream connected!")
+    print("Input source connected!")
 
 # Get stream properties if available
 fps = int(cap.get(cv2.CAP_PROP_FPS)) or 30
 frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
 frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
 
-# For HTTP sources, get actual dimensions from first frame
-if isinstance(cap, HTTPCaptureSource):
-    ret, test_frame = cap.read()
-    if ret and test_frame is not None:
-        frame_height, frame_width = test_frame.shape[:2]
-        print(f"Stream info (ESP32-CAM): {frame_width}x{frame_height} @ ~{fps}fps (HTTP polling)")
-    else:
-        print(f"Warning: Could not read test frame from HTTP source")
-else:
-    print(f"Stream info: {frame_width}x{frame_height} @ {fps}fps")
+print(f"Stream info: {frame_width}x{frame_height} @ {fps}fps")
 
 # =============================================================================
 # GLOBAL SHARED STATE
@@ -652,6 +689,8 @@ try:
         else:
             time.sleep(0.1)
 
+
+
 except KeyboardInterrupt:
     print("\n\n[MAIN] Processing interrupted by user (Ctrl+C)")
     stop_event.set()
@@ -659,7 +698,17 @@ except Exception as e:
     print(f"\n[MAIN] Error: {e}")
     import traceback
     traceback.print_exc()
+
+
+# 👉 ICI en dehors du try
+def signal_handler(sig, frame):
+    print("\n[MAIN] Signal received, shutting down...")
     stop_event.set()
+
+
+# 👉 Et enregistre les signaux ici
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 # =============================================================================
 # CLEANUP
@@ -667,18 +716,26 @@ except Exception as e:
 print("\n[MAIN] Stopping threads...")
 stop_event.set()
 
-# Wait for threads to finish (with timeout)
-capture_thread.join(timeout=2)
-yolo_thread.join(timeout=2)
-ocr_thread.join(timeout=2)
+capture_thread.join(timeout=3)
+yolo_thread.join(timeout=3)
+ocr_thread.join(timeout=3)
 
-# Release resources
-cap.release()
-if not headless:
-    try:
-        cv2.destroyAllWindows()
-    except:
-        pass
+print("[MAIN] Releasing camera...")
+try:
+    cap.release()
+    cap = None
+except:
+    pass
+
+cv2.destroyAllWindows()
+
+gc.collect()
+
+if torch.cuda.is_available():
+    torch.cuda.empty_cache()
+
+# Let Argus recover
+time.sleep(2)
 
 print("\n" + "=" * 70)
 print(f"Stream processing completed!")

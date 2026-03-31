@@ -8,10 +8,22 @@ services:
       - PIP_INDEX_URL=https://pypi.org/simple
       - PIP_TRUSTED_HOST=""
       - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
     volumes:
       - ./:/workspace
       - /tmp/argus_socket:/tmp/argus_socket
       - /tmp/.X11-unix:/tmp/.X11-unix
+      - /dev/video0:/dev/video0
+      - /run:/run:rw
+    devices:
+      - /dev/video0:/dev/video0:rwm
+      - /dev/nvhost-ctrl-gpu
+      - /dev/nvhost-prof-gpu
+      - /dev/nvmap
+    cap_add:
+      - SYS_ADMIN
+      - SYS_RAWIO
     working_dir: /workspace
     shm_size: 8g
     mem_limit: 7G
@@ -22,7 +34,10 @@ services:
     command: >
       bash -c "
         echo 'Installing dependencies (one-time setup)...' &&
-        pip install -q 'numpy<2.0' ultralytics &&
+        apt-get update &&
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3-opencv gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad &&
+        pip install -q --no-cache-dir 'numpy<2.0' ultralytics easyocr &&
+        pip uninstall -y opencv-python opencv-python-headless opencv-contrib-python opencv-contrib-python-headless >/dev/null 2>&1 || true &&
         echo 'Container ready for inference!' &&
         echo 'Use ./inference_simple.sh to run inference' &&
         tail -f /dev/null
