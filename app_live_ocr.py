@@ -388,16 +388,51 @@ print(f"Stream info: {frame_width}x{frame_height} @ {fps}fps")
 # =============================================================================
 # GLOBAL SHARED STATE
 # =============================================================================
-capture_queue = queue.Queue(maxsize=30)
-yolo_queue = queue.Queue(maxsize=30)
+# Keep tiny queues to prioritize low latency over full-frame throughput.
+capture_queue = queue.Queue(maxsize=2)
+yolo_queue = queue.Queue(maxsize=2)
 stop_event = threading.Event()
 detection_counts = defaultdict(int)
 stats_lock = threading.Lock()
+display_lock = threading.Lock()
 
 # Shared statistics
 frame_count = 0
 processed_count = 0
 detection_count = 0
+capture_dropped = 0
+yolo_dropped = 0
+latest_display_frame = None
+
+
+def queue_put_latest(q, item):
+    """Insert item while discarding stale queued data to keep real-time behavior."""
+    dropped = 0
+    while True:
+        try:
+            q.put_nowait(item)
+            return dropped
+        except queue.Full:
+            try:
+                q.get_nowait()
+                dropped += 1
+            except queue.Empty:
+                return dropped
+
+
+def queue_get_latest(q, timeout=1.0):
+    """Get one item, then drain queue and keep only the newest available item."""
+    item = q.get(timeout=timeout)
+    while True:
+        try:
+            item = q.get_nowait()
+        except queue.Empty:
+            return item
+
+
+def signal_handler(sig, frame):
+    print("\n[MAIN] Signal received, shutting down...")
+    stop_event.set()
 
 
 # =============================================================================
@@ -405,7 +440,7 @@ detection_count = 0
 # =============================================================================
 def capture_frames(cap_source, capture_queue, stop_event, frame_skip):
     """Capture frames from stream and push to queue with frame skipping."""
-    global frame_count
+    global frame_count, capture_dropped
     local_frame_id = 0
     
     print("[CAPTURE] Thread started")
@@ -427,12 +462,10 @@ def capture_frames(cap_source, capture_queue, stop_event, frame_skip):
         if local_frame_id % frame_skip != 0:
             continue
         
-        # Try to put frame in queue (non-blocking with timeout)
-        try:
-            capture_queue.put((local_frame_id, frame), timeout=0.1)
-        except queue.Full:
-            # Drop frame if queue is full (backpressure)
-            pass
+        dropped = queue_put_latest(capture_queue, (local_frame_id, frame))
+        if dropped:
+            with stats_lock:
+                capture_dropped += dropped
     
     print("[CAPTURE] Thread stopped")
 
@@ -442,7 +475,7 @@ def capture_frames(cap_source, capture_queue, stop_event, frame_skip):
 # =============================================================================
 def yolo_inference(model, device, capture_queue, yolo_queue, conf, imgsz, stop_event):
     """Process frames with YOLO detection."""
-    global processed_count
+    global processed_count, yolo_dropped
     local_processed = 0
     current_device = device
     oom_fallback_done = False
@@ -451,7 +484,7 @@ def yolo_inference(model, device, capture_queue, yolo_queue, conf, imgsz, stop_e
     
     while not stop_event.is_set():
         try:
-            frame_id, frame = capture_queue.get(timeout=1)
+            frame_id, frame = queue_get_latest(capture_queue, timeout=1)
         except queue.Empty:
             continue
         
@@ -475,12 +508,10 @@ def yolo_inference(model, device, capture_queue, yolo_queue, conf, imgsz, stop_e
                 num_detections = sum(len(r.boxes) for r in results)
                 print(f"[YOLO] Processed {local_processed} frames | Latest batch: {num_detections} objects detected")
             
-            # Push results to OCR queue
-            try:
-                yolo_queue.put((frame_id, frame, results), timeout=0.1)
-            except queue.Full:
-                # Drop if OCR queue is full
-                pass
+            dropped = queue_put_latest(yolo_queue, (frame_id, frame, results))
+            if dropped:
+                with stats_lock:
+                    yolo_dropped += dropped
             
             # Clear GPU cache periodically
             if current_device == "cuda" and local_processed % 50 == 0:
@@ -520,19 +551,19 @@ def yolo_inference(model, device, capture_queue, yolo_queue, conf, imgsz, stop_e
 def ocr_processing(reader, yolo_queue, detection_counts, stop_event, 
                    frame_width, frame_height, conf, output_dir, headless):
     """Apply OCR to detected boxes and update results."""
-    global detection_count
+    global detection_count, latest_display_frame
     local_detection_count = 0
     
     print("[OCR] Thread started")
     
     while not stop_event.is_set():
         try:
-            frame_id, frame, results = yolo_queue.get(timeout=1)
+            frame_id, frame, results = queue_get_latest(yolo_queue, timeout=1)
         except queue.Empty:
             continue
         
-        display_frame = frame.copy()
-        frame_detections = 0
+        need_display_frame = (not headless) or bool(output_dir)
+        display_frame = frame.copy() if need_display_frame else frame
         
         # Process each detection
         for r in results:
@@ -578,8 +609,6 @@ def ocr_processing(reader, yolo_queue, detection_counts, stop_event,
                                 local_detection_count += 1
                                 detection_count = local_detection_count
                             
-                            frame_detections += 1
-                            
                             # Draw on display frame
                             cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                             cv2.putText(
@@ -619,13 +648,9 @@ def ocr_processing(reader, yolo_queue, detection_counts, stop_event,
             except Exception as e:
                 print(f"[OCR] Error saving frame: {e}")
         
-        # Display frame if not headless
         if not headless:
-            try:
-                cv2.imshow('Live Stream OCR', display_frame)
-                cv2.waitKey(1)
-            except cv2.error:
-                pass
+            with display_lock:
+                latest_display_frame = display_frame
     
     print("[OCR] Thread stopped")
 
@@ -666,6 +691,9 @@ ocr_thread.start()
 # MAIN THREAD: MONITOR AND HANDLE KEYBOARD INPUT
 # =============================================================================
 try:
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     last_stats_time = time.time()
     
     while not stop_event.is_set():
@@ -673,21 +701,36 @@ try:
         current_time = time.time()
         if current_time - last_stats_time >= 5.0:
             with stats_lock:
-                print(f"[STATS] Frames: {frame_count} | Processed: {processed_count} | Detections: {detection_count} | Unique: {len(detection_counts)}")
+                print(
+                    f"[STATS] Frames: {frame_count} | Processed: {processed_count} | "
+                    f"Detections: {detection_count} | Unique: {len(detection_counts)} | "
+                    f"Dropped(cap->yolo): {capture_dropped} | Dropped(yolo->ocr): {yolo_dropped}"
+                )
             last_stats_time = current_time
         
         # Handle keyboard input in display mode
         if not headless:
             try:
-                key = cv2.waitKey(100) & 0xFF
+                with display_lock:
+                    frame_to_show = None if latest_display_frame is None else latest_display_frame.copy()
+
+                if frame_to_show is not None:
+                    cv2.imshow('Live Stream OCR', frame_to_show)
+
+                key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
                     print("\n[MAIN] Quit signal received")
                     stop_event.set()
                     break
                 elif key == ord('s'):
-                    # Save current frame (simplified - saves last processed frame)
                     filename = f"frame_manual_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-                    print(f"[MAIN] Manual save triggered: {filename}")
+                    if frame_to_show is not None:
+                        cv2.imwrite(filename, frame_to_show)
+                        print(f"[MAIN] Manual save triggered: {filename}")
+                    else:
+                        print("[MAIN] No frame available yet for manual save")
+
+                time.sleep(0.005)
             except:
                 pass
         else:
@@ -702,17 +745,6 @@ except Exception as e:
     print(f"\n[MAIN] Error: {e}")
     import traceback
     traceback.print_exc()
-
-
-# 👉 ICI en dehors du try
-def signal_handler(sig, frame):
-    print("\n[MAIN] Signal received, shutting down...")
-    stop_event.set()
-
-
-# 👉 Et enregistre les signaux ici
-signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGTERM, signal_handler)
 
 # =============================================================================
 # CLEANUP

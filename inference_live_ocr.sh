@@ -51,6 +51,15 @@ fi
 
 INPUT_SOURCE="$1"
 
+# Detect display/headless intent from CLI args (for X11 auth setup).
+HEADLESS_MODE=0
+for arg in "$@"; do
+    if [ "$arg" = "--headless" ] || [ "$arg" = "--output-dir" ]; then
+        HEADLESS_MODE=1
+        break
+    fi
+done
+
 # Check if container is running
 if ! docker compose ps --status running --services | grep -q "^yolo-inference$"; then
     echo "Container not running. Starting it now..."
@@ -76,6 +85,16 @@ fi
 # For IMX477 sources, ensure container has a camera-compatible backend.
 if [[ "$INPUT_SOURCE" =~ ^(imx477|arducam|arducam-imx477|csi)$ ]]; then
     echo "Checking IMX477 camera backend in container..."
+
+    # Argus/GStreamer path requires EGL display access in many Jetson container setups.
+    # Re-grant local X access for container root to avoid:
+    # "Authorization required" and "Failed to initialize EGLDisplay".
+    if [ "$HEADLESS_MODE" -eq 0 ] && [ -n "$DISPLAY" ] && command -v xhost >/dev/null 2>&1; then
+        if ! xhost +SI:localuser:root >/dev/null 2>&1; then
+            echo "Warning: could not update X11 permissions with xhost"
+            echo "If camera open fails with EGL auth errors, run: xhost +SI:localuser:root"
+        fi
+    fi
 
     if ! docker compose exec -T yolo-inference python3 - <<'PY' >/dev/null 2>&1
 import cv2
@@ -159,8 +178,7 @@ PY
 fi
 echo ""
 
-# Run the Python script inside the container with display support
-# Note: For X11 forwarding, make sure to set up display properly
+# Run the Python script inside the container.
 docker compose exec -T yolo-inference python3 app_live_ocr.py "$@"
 
 EXIT_CODE=$?
