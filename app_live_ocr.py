@@ -435,6 +435,10 @@ def signal_handler(sig, frame):
     stop_event.set()
 
 
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
+
 # =============================================================================
 # THREAD 1: CAPTURE FRAMES
 # =============================================================================
@@ -691,9 +695,6 @@ ocr_thread.start()
 # MAIN THREAD: MONITOR AND HANDLE KEYBOARD INPUT
 # =============================================================================
 try:
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-
     last_stats_time = time.time()
     
     while not stop_event.is_set():
@@ -731,12 +732,10 @@ try:
                         print("[MAIN] No frame available yet for manual save")
 
                 time.sleep(0.005)
-            except:
+            except Exception:
                 pass
         else:
             time.sleep(0.1)
-
-
 
 except KeyboardInterrupt:
     print("\n\n[MAIN] Processing interrupted by user (Ctrl+C)")
@@ -745,33 +744,33 @@ except Exception as e:
     print(f"\n[MAIN] Error: {e}")
     import traceback
     traceback.print_exc()
+finally:
+    # =============================================================================
+    # CLEANUP
+    # =============================================================================
+    print("\n[MAIN] Stopping threads...")
+    stop_event.set()
 
-# =============================================================================
-# CLEANUP
-# =============================================================================
-print("\n[MAIN] Stopping threads...")
-stop_event.set()
+    capture_thread.join(timeout=3)
+    yolo_thread.join(timeout=3)
+    ocr_thread.join(timeout=3)
 
-capture_thread.join(timeout=3)
-yolo_thread.join(timeout=3)
-ocr_thread.join(timeout=3)
+    print("[MAIN] Releasing camera...")
+    try:
+        cap.release()
+        cap = None
+    except Exception:
+        pass
 
-print("[MAIN] Releasing camera...")
-try:
-    cap.release()
-    cap = None
-except:
-    pass
+    cv2.destroyAllWindows()
 
-cv2.destroyAllWindows()
+    gc.collect()
 
-gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
-if torch.cuda.is_available():
-    torch.cuda.empty_cache()
-
-# Let Argus recover
-time.sleep(2)
+    # Let Argus recover
+    time.sleep(2)
 
 print("\n" + "=" * 70)
 print(f"Stream processing completed!")

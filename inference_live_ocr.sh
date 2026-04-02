@@ -51,6 +51,22 @@ fi
 
 INPUT_SOURCE="$1"
 
+PYTHON_CMD=(docker compose exec -T yolo-inference python3 app_live_ocr.py "$@")
+
+cleanup() {
+    local exit_code=$?
+
+    if [ -n "${PYTHON_CMD_PID:-}" ] && kill -0 "$PYTHON_CMD_PID" >/dev/null 2>&1; then
+        docker compose exec -T yolo-inference sh -lc 'pkill -INT -f "[p]ython3 app_live_ocr.py" >/dev/null 2>&1 || true' >/dev/null 2>&1 || true
+        kill "$PYTHON_CMD_PID" >/dev/null 2>&1 || true
+        wait "$PYTHON_CMD_PID" >/dev/null 2>&1 || true
+    fi
+
+    exit "$exit_code"
+}
+
+trap cleanup INT TERM
+
 # Detect display/headless intent from CLI args (for X11 auth setup).
 HEADLESS_MODE=0
 for arg in "$@"; do
@@ -179,9 +195,12 @@ fi
 echo ""
 
 # Run the Python script inside the container.
-docker compose exec -T yolo-inference python3 app_live_ocr.py "$@"
-
+PYTHON_CMD_PID=""
+"${PYTHON_CMD[@]}" &
+PYTHON_CMD_PID=$!
+wait "$PYTHON_CMD_PID"
 EXIT_CODE=$?
+trap - INT TERM
 
 if [[ "$EXIT_CODE" =~ ^[0-9]+$ ]] && [ "$EXIT_CODE" -eq 0 ]; then
     echo ""
