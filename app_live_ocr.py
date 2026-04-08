@@ -449,6 +449,11 @@ elif lwm2m_reporter.is_active():
     print("[LWM2M] Reachability check uses ICMP ping when available, otherwise a UDP route probe")
     print(f"[LWM2M] Ping check: {'reachable' if lwm2m_reporter.ping_server() else 'unreachable'}")
     lwm2m_reporter.start()
+    startup_test_payload = lwm2m_reporter.build_test_payload()
+    if lwm2m_reporter.enqueue(startup_test_payload):
+        print("[LWM2M] Startup test payload queued")
+    else:
+        print("[LWM2M] Startup test payload not queued")
 
 # =============================================================================
 # GLOBAL SHARED STATE

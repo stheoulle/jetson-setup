@@ -163,6 +163,16 @@ class LwM2MSummaryReporter:
             "numbers": eligible,
         }
 
+    def build_test_payload(self):
+        return {
+            "timestamp_utc": datetime.utcnow().isoformat() + "Z",
+            "device_id": self.device_id,
+            "endpoint_name": self.endpoint_name,
+            "source": self.source,
+            "mode": "startup_test",
+            "message": "LwM2M started on client",
+        }
+
     def enqueue(self, payload):
         if not self.is_active() or payload is None:
             return False
