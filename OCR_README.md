@@ -11,6 +11,9 @@ This script processes videos to detect boxes with 4-digit numbers, applies OCR t
 # Custom CSV output with video
 ./inference_ocr_easy.sh vidéos/C0088.MP4 --output-csv my_results.csv --save-video
 
+# Save an annotated MP4 that shows YOLO boxes and OCR text
+./inference_ocr_easy.sh vidéos/C0088.MP4 --save-video --output-video annotated.mp4
+
 # Fast mode - process every 5th frame
 ./inference_ocr_easy.sh vidéos/C0088.MP4 --frame-skip 5
 
@@ -46,6 +49,7 @@ Number,Count
 - `--imgsz INT`: Inference image size (default: 320)
 - `--output-csv FILE`: Output CSV filename (default: detections.csv)
 - `--save-video`: Save annotated video with OCR results
+- `--output-video FILE`: Write the annotated MP4 to a specific path
 - `--frame-skip INT`: Process every Nth frame for speed (default: 1)
 - `--ocr-cpu`: Force OCR to use CPU instead of GPU
 

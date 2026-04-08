@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 YOLO Video Inference with OCR - Frame-by-frame processing
-Detects boxes, applies OCR to recognize 4-digit numbers, and saves counts to CSV
-Optimized for Jetson Orin with memory constraints
-Uses EasyOCR for better Jetson compatibility
+Detects boxes, applies OCR to recognize 4-digit numbers, saves counts to CSV,
+and can export an annotated video showing both YOLO boxes and OCR results.
+Optimized for Jetson Orin with memory constraints.
+Uses EasyOCR for better Jetson compatibility.
 """
 
 import torch
@@ -55,6 +56,7 @@ if len(sys.argv) < 2:
     print("  --imgsz INT         Inference size (default: 320)")
     print("  --output-csv FILE   Output CSV file (default: detections.csv)")
     print("  --save-video        Save annotated video with OCR results")
+    print("  --output-video FILE Output annotated video file")
     print("  --frame-skip INT    Process every Nth frame (default: 1)")
     print("  --ocr-cpu           Force OCR to use CPU (default: use GPU)")
     sys.exit(1)
@@ -64,6 +66,7 @@ conf = 0.5
 imgsz = 320
 output_csv = "detections.csv"
 save_video = False
+output_video = None
 frame_skip = 1
 ocr_gpu = True
 
@@ -82,6 +85,10 @@ while i < len(sys.argv):
     elif sys.argv[i] == '--save-video':
         save_video = True
         i += 1
+    elif sys.argv[i] == '--output-video' and i + 1 < len(sys.argv):
+        output_video = sys.argv[i + 1]
+        save_video = True
+        i += 2
     elif sys.argv[i] == '--frame-skip' and i + 1 < len(sys.argv):
         frame_skip = int(sys.argv[i + 1])
         i += 2
@@ -107,6 +114,7 @@ print(f"Confidence: {conf}")
 print(f"Image size: {imgsz}px")
 print(f"Output CSV: {output_csv}")
 print(f"Save video: {save_video}")
+print(f"Output video: {output_video if output_video else 'auto'}")
 print(f"Frame skip: {frame_skip}")
 print(f"OCR device: {'GPU' if ocr_gpu else 'CPU'}")
 print("=" * 70)
@@ -148,6 +156,33 @@ def extract_4digit(text):
             return match.group()
     return None
 
+
+def draw_label(frame, text, x, y, color=(0, 255, 0)):
+    """Draw a readable label with a filled background."""
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale = 0.55
+    thickness = 2
+    (text_width, text_height), baseline = cv2.getTextSize(text, font, scale, thickness)
+
+    pad_x = 6
+    pad_y = 6
+    x1 = max(0, x)
+    y1 = max(0, y - text_height - pad_y * 2)
+    x2 = x1 + text_width + pad_x * 2
+    y2 = y1 + text_height + baseline + pad_y * 2
+
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 0), -1)
+    cv2.putText(
+        frame,
+        text,
+        (x1 + pad_x, y2 - pad_y - baseline),
+        font,
+        scale,
+        color,
+        thickness,
+        cv2.LINE_AA,
+    )
+
 # Dictionary to count detections
 detection_counts = defaultdict(int)
 
@@ -159,6 +194,8 @@ if not cap.isOpened():
 
 # Get video properties
 fps = int(cap.get(cv2.CAP_PROP_FPS))
+if fps <= 0:
+    fps = 30
 frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -168,7 +205,11 @@ print(f"\nVideo info: {frame_width}x{frame_height} @ {fps}fps, {total_frames} fr
 # Setup video writer if needed
 video_writer = None
 if save_video:
-    output_video = video_path.parent / f"{video_path.stem}_ocr.mp4"
+    if output_video:
+        output_video = Path(output_video)
+    else:
+        output_video = video_path.parent / f"{video_path.stem}_annotated.mp4"
+    output_video.parent.mkdir(parents=True, exist_ok=True)
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     video_writer = cv2.VideoWriter(str(output_video), fourcc, fps, (frame_width, frame_height))
     print(f"Output video: {output_video}")
@@ -195,12 +236,14 @@ try:
             continue
         
         processed_count += 1
+        output_frame = frame.copy() if save_video else None
         
         # Run YOLO detection
         results = model(frame, conf=conf, imgsz=imgsz, device=device, verbose=False)
         
         # Process each detection
         for r in results:
+            class_names = getattr(r, 'names', None) or getattr(model, 'names', {})
             for box in r.boxes:
                 box_conf = float(box.conf[0])
                 if box_conf < conf:
@@ -208,6 +251,8 @@ try:
                 
                 # Extract box coordinates
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
+                class_id = int(box.cls[0]) if box.cls is not None and len(box.cls) else 0
+                class_name = class_names.get(class_id, str(class_id))
                 
                 # Add padding to crop
                 padding = 5
@@ -231,33 +276,39 @@ try:
                 # Apply OCR
                 try:
                     ocr_results = reader.readtext(gray, detail=1)
+                    best_number = None
+                    best_ocr_score = 0.0
                     
                     for detection in ocr_results:
                         bbox, raw_text, ocr_score = detection
                         
                         # Extract 4-digit number
                         number = extract_4digit(raw_text)
-                        
-                        if number and ocr_score > 0.3:  # Minimum OCR confidence
-                            detection_counts[number] += 1
-                            detection_count += 1
-                            
-                            # Draw on frame if saving video
-                            if save_video:
-                                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                                cv2.putText(
-                                    frame,
-                                    number,
-                                    (x1, y1 - 10),
-                                    cv2.FONT_HERSHEY_SIMPLEX,
-                                    0.9,
-                                    (0, 255, 0),
-                                    2
-                                )
-                            
-                            if detection_count % 10 == 0:
-                                print(f"Frame {frame_count}/{total_frames}: Detected {number} "
-                                      f"(OCR: {ocr_score:.2f}, YOLO: {box_conf:.2f})")
+
+                        if number and ocr_score > 0.3 and ocr_score >= best_ocr_score:
+                            best_number = number
+                            best_ocr_score = float(ocr_score)
+
+                    if best_number:
+                        detection_counts[best_number] += 1
+                        detection_count += 1
+
+                        if detection_count % 10 == 0:
+                            print(
+                                f"Frame {frame_count}/{total_frames}: Detected {best_number} "
+                                f"(OCR: {best_ocr_score:.2f}, YOLO: {box_conf:.2f})"
+                            )
+
+                    if save_video and output_frame is not None:
+                        box_color = (0, 255, 0) if best_number else (0, 165, 255)
+                        cv2.rectangle(output_frame, (x1, y1), (x2, y2), box_color, 2)
+
+                        if best_number:
+                            label = f"{class_name} | YOLO {box_conf:.2f} | OCR {best_number} ({best_ocr_score:.2f})"
+                        else:
+                            label = f"{class_name} | YOLO {box_conf:.2f} | OCR none"
+
+                        draw_label(output_frame, label, x1, y1, color=box_color)
                 
                 except Exception as e:
                     # OCR can fail on some crops, continue
@@ -265,7 +316,7 @@ try:
         
         # Write frame if saving video
         if save_video and video_writer:
-            video_writer.write(frame)
+            video_writer.write(output_frame if output_frame is not None else frame)
         
         # Clear cache periodically
         if device == "cuda" and processed_count % 50 == 0:

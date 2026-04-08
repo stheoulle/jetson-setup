@@ -31,4 +31,7 @@ Run the vidéo inference on a smaller GPU that fallsbak to cpu if GPU is still n
 
 # Larger inference size (if it works)
 ./inference_simple.sh vidéos/C0088.MP4 --imgsz 416
+
+# Annotated output video with YOLO boxes and OCR labels
+./inference_ocr_easy.sh vidéos/C0088.MP4 --save-video --output-video annotated.mp4
 ```
