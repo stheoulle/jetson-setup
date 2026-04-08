@@ -206,13 +206,13 @@ print(f"\nVideo info: {frame_width}x{frame_height} @ {fps}fps, {total_frames} fr
 video_writer = None
 if save_video:
     if output_video:
-        output_video = Path(output_video)
+        output_video_path = Path(output_video)
     else:
-        output_video = video_path.parent / f"{video_path.stem}_annotated.mp4"
-    output_video.parent.mkdir(parents=True, exist_ok=True)
+        output_video_path = video_path.parent / f"{video_path.stem}_annotated.mp4"
+    output_video_path.parent.mkdir(parents=True, exist_ok=True)
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    video_writer = cv2.VideoWriter(str(output_video), fourcc, fps, (frame_width, frame_height))
-    print(f"Output video: {output_video}")
+    video_writer = cv2.VideoWriter(str(output_video_path), fourcc, fps, (frame_width, frame_height))
+    print(f"Output video: {output_video_path}")
 
 print("\nStarting video processing with OCR...\n")
 
