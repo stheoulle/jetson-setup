@@ -24,6 +24,7 @@ import threading
 import queue
 import gc
 import signal
+from lwm2m_phase1 import LwM2MSummaryReporter
 
 
 try:
@@ -72,6 +73,13 @@ if len(sys.argv) < 2:
     print("  --ocr-cpu           Force OCR to use CPU (default: use GPU)")
     print("  --output-dir DIR    Save frames to directory (no display)")
     print("  --headless          Headless mode (no display, save inference stats)")
+    print("  --lwm2m-enable      Enable Phase 1 LwM2M summary reporting")
+    print("  --lwm2m-server URI  CoAP endpoint URI (example: coap://127.0.0.1:5683/lwm2m/summary)")
+    print("  --lwm2m-endpoint ID LwM2M endpoint name (default: jetson-ocr)")
+    print("  --lwm2m-device-id ID Device ID for payloads (default: endpoint name)")
+    print("  --lwm2m-threshold N Minimum count before reporting number (default: 5)")
+    print("  --lwm2m-interval S  Summary publish interval in seconds (default: 5)")
+    print("  --lwm2m-store FILE  Store-and-forward file path (default: lwm2m_pending.ndjson)")
     print("\nControls (display mode only):")
     print("  q                   Quit the stream")
     print("  s                   Save current frame with detections")
@@ -91,6 +99,13 @@ sensor_id = 0
 capture_width = 1280
 capture_height = 720
 capture_fps = 30
+lwm2m_enable = os.getenv("LWM2M_ENABLE", "0") == "1"
+lwm2m_server = os.getenv("LWM2M_SERVER_URI", "")
+lwm2m_endpoint = os.getenv("LWM2M_ENDPOINT_NAME", "jetson-ocr")
+lwm2m_device_id = os.getenv("LWM2M_DEVICE_ID", lwm2m_endpoint)
+lwm2m_threshold = int(os.getenv("LWM2M_THRESHOLD", "5"))
+lwm2m_interval = int(os.getenv("LWM2M_INTERVAL_SEC", "5"))
+lwm2m_store_file = os.getenv("LWM2M_STORE_FILE", "lwm2m_pending.ndjson")
 
 # Parse optional arguments
 i = 2
@@ -135,6 +150,29 @@ while i < len(sys.argv):
     elif sys.argv[i] == '--headless':
         headless = True
         i += 1
+    elif sys.argv[i] == '--lwm2m-enable':
+        lwm2m_enable = True
+        i += 1
+    elif sys.argv[i] == '--lwm2m-server' and i + 1 < len(sys.argv):
+        lwm2m_server = sys.argv[i + 1]
+        i += 2
+    elif sys.argv[i] == '--lwm2m-endpoint' and i + 1 < len(sys.argv):
+        lwm2m_endpoint = sys.argv[i + 1]
+        if not os.getenv("LWM2M_DEVICE_ID"):
+            lwm2m_device_id = lwm2m_endpoint
+        i += 2
+    elif sys.argv[i] == '--lwm2m-device-id' and i + 1 < len(sys.argv):
+        lwm2m_device_id = sys.argv[i + 1]
+        i += 2
+    elif sys.argv[i] == '--lwm2m-threshold' and i + 1 < len(sys.argv):
+        lwm2m_threshold = max(1, int(sys.argv[i + 1]))
+        i += 2
+    elif sys.argv[i] == '--lwm2m-interval' and i + 1 < len(sys.argv):
+        lwm2m_interval = max(1, int(sys.argv[i + 1]))
+        i += 2
+    elif sys.argv[i] == '--lwm2m-store' and i + 1 < len(sys.argv):
+        lwm2m_store_file = sys.argv[i + 1]
+        i += 2
     else:
         i += 1
 
@@ -194,6 +232,14 @@ print(f"Output frames: {output_dir if output_dir else 'None (display mode)'}")
 print(f"Frame skip: {frame_skip}")
 print(f"OCR device: {'GPU' if ocr_gpu else 'CPU'}")
 print(f"Mode: {'Headless' if headless else 'Display'}")
+print(f"LwM2M enabled: {'yes' if lwm2m_enable else 'no'}")
+if lwm2m_enable:
+    print(f"LwM2M server: {lwm2m_server if lwm2m_server else 'None (disabled until set)'}")
+    print(f"LwM2M endpoint: {lwm2m_endpoint}")
+    print(f"LwM2M device id: {lwm2m_device_id}")
+    print(f"LwM2M threshold: {lwm2m_threshold}")
+    print(f"LwM2M interval: {lwm2m_interval}s")
+    print(f"LwM2M store file: {lwm2m_store_file}")
 print("=" * 70)
 
 # Load YOLO model
@@ -384,6 +430,23 @@ frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
 frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
 
 print(f"Stream info: {frame_width}x{frame_height} @ {fps}fps")
+
+lwm2m_reporter = LwM2MSummaryReporter(
+    enabled=lwm2m_enable,
+    server_uri=lwm2m_server,
+    endpoint_name=lwm2m_endpoint,
+    device_id=lwm2m_device_id,
+    source=resolved_stream_url,
+    threshold=lwm2m_threshold,
+    interval_sec=lwm2m_interval,
+    store_file=lwm2m_store_file,
+)
+
+if lwm2m_enable and not lwm2m_reporter.is_active():
+    print("[LWM2M] Disabled: set --lwm2m-server and ensure aiocoap is installed")
+elif lwm2m_reporter.is_active():
+    print(f"[LWM2M] Phase 1 summary reporter enabled: {lwm2m_server}")
+    lwm2m_reporter.start()
 
 # =============================================================================
 # GLOBAL SHARED STATE
@@ -696,17 +759,44 @@ ocr_thread.start()
 # =============================================================================
 try:
     last_stats_time = time.time()
+    last_lwm2m_time = 0.0
     
     while not stop_event.is_set():
         # Display periodic stats
         current_time = time.time()
         if current_time - last_stats_time >= 5.0:
             with stats_lock:
+                stats_frame_count = frame_count
+                stats_processed_count = processed_count
+                stats_detection_count = detection_count
+                stats_unique_count = len(detection_counts)
+                stats_capture_dropped = capture_dropped
+                stats_yolo_dropped = yolo_dropped
+                detection_snapshot = dict(detection_counts)
+
                 print(
-                    f"[STATS] Frames: {frame_count} | Processed: {processed_count} | "
-                    f"Detections: {detection_count} | Unique: {len(detection_counts)} | "
-                    f"Dropped(cap->yolo): {capture_dropped} | Dropped(yolo->ocr): {yolo_dropped}"
+                    f"[STATS] Frames: {stats_frame_count} | Processed: {stats_processed_count} | "
+                    f"Detections: {stats_detection_count} | Unique: {stats_unique_count} | "
+                    f"Dropped(cap->yolo): {stats_capture_dropped} | Dropped(yolo->ocr): {stats_yolo_dropped}"
                 )
+
+            if lwm2m_reporter.is_active() and current_time - last_lwm2m_time >= lwm2m_reporter.interval_sec:
+                summary_payload = lwm2m_reporter.build_summary_payload(
+                    counts=detection_snapshot,
+                    frame_count=stats_frame_count,
+                    processed_count=stats_processed_count,
+                    detection_count=stats_detection_count,
+                )
+                if summary_payload is not None:
+                    queued = lwm2m_reporter.enqueue(summary_payload)
+                    if queued:
+                        lwm2m_stats = lwm2m_reporter.get_stats()
+                        print(
+                            f"[LWM2M] Summary queued | queue={lwm2m_stats['queue_depth']} "
+                            f"pending_disk={lwm2m_stats['pending_disk']}"
+                        )
+                last_lwm2m_time = current_time
+
             last_stats_time = current_time
         
         # Handle keyboard input in display mode
@@ -755,6 +845,10 @@ finally:
     yolo_thread.join(timeout=3)
     ocr_thread.join(timeout=3)
 
+    if lwm2m_reporter.is_active():
+        print("[MAIN] Stopping LwM2M reporter...")
+        lwm2m_reporter.stop()
+
     print("[MAIN] Releasing camera...")
     try:
         cap.release()
@@ -777,6 +871,12 @@ print(f"Stream processing completed!")
 print(f"Processed {processed_count} frames (total: {frame_count})")
 print(f"Total detections: {detection_count}")
 print(f"Unique numbers: {len(detection_counts)}")
+if lwm2m_reporter.is_active():
+    lwm2m_stats = lwm2m_reporter.get_stats()
+    print(
+        f"LwM2M sent: {lwm2m_stats['sent']} | failed: {lwm2m_stats['failed']} | "
+        f"queued: {lwm2m_stats['queued']} | pending_disk: {lwm2m_stats['pending_disk']}"
+    )
 print("=" * 70)
 
 # Save results to CSV if requested
