@@ -20,12 +20,21 @@ if [ $# -lt 1 ]; then
     echo "  --imgsz INT         Inference size (default: 320)"
     echo "  --output-csv FILE   Output CSV file (default: detections.csv)"
     echo "  --save-video        Save annotated video with OCR results"
+    echo "  --output-video FILE Output annotated video file"
     echo "  --frame-skip INT    Process every Nth frame (default: 1)"
     echo "  --ocr-cpu           Force OCR to use CPU"
+    echo "  --lwm2m-enable      Enable Phase 1 LwM2M summary reporting"
+    echo "  --lwm2m-server URI  CoAP endpoint URI for summary payloads"
+    echo "  --lwm2m-endpoint ID Endpoint name for payloads"
+    echo "  --lwm2m-device-id ID Device ID for payloads"
+    echo "  --lwm2m-threshold N Minimum count before reporting number (default: 5)"
+    echo "  --lwm2m-interval S  Summary publish interval seconds (default: 5)"
+    echo "  --lwm2m-store FILE  Store-and-forward file path"
     echo ""
     echo "Examples:"
     echo "  $0 video.mp4"
     echo "  $0 video.mp4 --output-csv results.csv --save-video"
+    echo "  $0 video.mp4 --save-video --output-video annotated.mp4"
     echo "  $0 video.mp4 --conf 0.7 --frame-skip 5 --ocr-cpu"
     echo ""
     echo "Note: Make sure to run 'docker compose up -d' first!"
@@ -65,6 +74,7 @@ import sys
 import numpy as np
 import torch
 import easyocr
+import aiocoap
 
 major = int(np.__version__.split('.')[0])
 if major >= 2:
@@ -75,10 +85,10 @@ print("ok")
 PY
 then
     echo "Missing or incompatible OCR dependencies detected"
-    echo "Installing compatible versions (numpy==1.26.4, easyocr)..."
-    if ! docker compose exec yolo-inference pip3 install --no-cache-dir "numpy==1.26.4" easyocr; then
+    echo "Installing compatible versions (numpy==1.26.4, easyocr, aiocoap)..."
+    if ! docker compose exec yolo-inference pip3 install --no-cache-dir "numpy==1.26.4" easyocr aiocoap; then
         echo "Failed to install dependencies in container"
-        echo "Try manually: docker compose exec yolo-inference pip3 install --no-cache-dir \"numpy==1.26.4\" easyocr"
+        echo "Try manually: docker compose exec yolo-inference pip3 install --no-cache-dir \"numpy==1.26.4\" easyocr aiocoap"
         exit 1
     fi
 
@@ -87,6 +97,7 @@ then
 import numpy as np
 import torch
 import easyocr
+import aiocoap
 major = int(np.__version__.split('.')[0])
 assert major < 2, np.__version__
 torch.from_numpy(np.zeros((1,), dtype=np.float32))
