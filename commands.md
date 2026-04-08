@@ -47,3 +47,15 @@ To send count to the receiving server
   --lwm2m-threshold 5 \
   --lwm2m-interval 5
 ```
+
+To send count to the receiving server from a video file
+
+```bash
+./inference_ocr_easy.sh vidéos/C0088.MP4 \
+  --lwm2m-enable \
+  --lwm2m-server coap://192.168.1.7:5683/lwm2m/summary \
+  --lwm2m-endpoint jetson-ocr-01 \
+  --lwm2m-device-id jetson-01 \
+  --lwm2m-threshold 5 \
+  --lwm2m-interval 5
+```

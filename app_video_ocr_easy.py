@@ -15,7 +15,10 @@ from pathlib import Path
 from ultralytics import YOLO
 import easyocr
 import sys
+import os
+import time
 from collections import defaultdict
+from lwm2m_phase1 import LwM2MSummaryReporter
 
 try:
     import numpy as np
@@ -59,6 +62,13 @@ if len(sys.argv) < 2:
     print("  --output-video FILE Output annotated video file")
     print("  --frame-skip INT    Process every Nth frame (default: 1)")
     print("  --ocr-cpu           Force OCR to use CPU (default: use GPU)")
+    print("  --lwm2m-enable      Enable Phase 1 LwM2M summary reporting")
+    print("  --lwm2m-server URI  CoAP endpoint URI (example: coap://127.0.0.1:5683/lwm2m/summary)")
+    print("  --lwm2m-endpoint ID LwM2M endpoint name (default: jetson-ocr)")
+    print("  --lwm2m-device-id ID Device ID for payloads (default: endpoint name)")
+    print("  --lwm2m-threshold N Minimum count before reporting number (default: 5)")
+    print("  --lwm2m-interval S  Summary publish interval in seconds (default: 5)")
+    print("  --lwm2m-store FILE  Store-and-forward file path (default: lwm2m_pending.ndjson)")
     sys.exit(1)
 
 video_path = sys.argv[1]
@@ -69,6 +79,13 @@ save_video = False
 output_video = None
 frame_skip = 1
 ocr_gpu = True
+lwm2m_enable = os.getenv("LWM2M_ENABLE", "0") == "1"
+lwm2m_server = os.getenv("LWM2M_SERVER_URI", "")
+lwm2m_endpoint = os.getenv("LWM2M_ENDPOINT_NAME", "jetson-ocr")
+lwm2m_device_id = os.getenv("LWM2M_DEVICE_ID", lwm2m_endpoint)
+lwm2m_threshold = int(os.getenv("LWM2M_THRESHOLD", "5"))
+lwm2m_interval = int(os.getenv("LWM2M_INTERVAL_SEC", "5"))
+lwm2m_store_file = os.getenv("LWM2M_STORE_FILE", "lwm2m_pending.ndjson")
 
 # Parse optional arguments
 i = 2
@@ -95,6 +112,29 @@ while i < len(sys.argv):
     elif sys.argv[i] == '--ocr-cpu':
         ocr_gpu = False
         i += 1
+    elif sys.argv[i] == '--lwm2m-enable':
+        lwm2m_enable = True
+        i += 1
+    elif sys.argv[i] == '--lwm2m-server' and i + 1 < len(sys.argv):
+        lwm2m_server = sys.argv[i + 1]
+        i += 2
+    elif sys.argv[i] == '--lwm2m-endpoint' and i + 1 < len(sys.argv):
+        lwm2m_endpoint = sys.argv[i + 1]
+        if not os.getenv("LWM2M_DEVICE_ID"):
+            lwm2m_device_id = lwm2m_endpoint
+        i += 2
+    elif sys.argv[i] == '--lwm2m-device-id' and i + 1 < len(sys.argv):
+        lwm2m_device_id = sys.argv[i + 1]
+        i += 2
+    elif sys.argv[i] == '--lwm2m-threshold' and i + 1 < len(sys.argv):
+        lwm2m_threshold = max(1, int(sys.argv[i + 1]))
+        i += 2
+    elif sys.argv[i] == '--lwm2m-interval' and i + 1 < len(sys.argv):
+        lwm2m_interval = max(1, int(sys.argv[i + 1]))
+        i += 2
+    elif sys.argv[i] == '--lwm2m-store' and i + 1 < len(sys.argv):
+        lwm2m_store_file = sys.argv[i + 1]
+        i += 2
     else:
         i += 1
 
@@ -117,6 +157,14 @@ print(f"Save video: {save_video}")
 print(f"Output video: {output_video if output_video else 'auto'}")
 print(f"Frame skip: {frame_skip}")
 print(f"OCR device: {'GPU' if ocr_gpu else 'CPU'}")
+print(f"LwM2M enabled: {'yes' if lwm2m_enable else 'no'}")
+if lwm2m_enable:
+    print(f"LwM2M server: {lwm2m_server if lwm2m_server else 'None (disabled until set)'}")
+    print(f"LwM2M endpoint: {lwm2m_endpoint}")
+    print(f"LwM2M device id: {lwm2m_device_id}")
+    print(f"LwM2M threshold: {lwm2m_threshold}")
+    print(f"LwM2M interval: {lwm2m_interval}s")
+    print(f"LwM2M store file: {lwm2m_store_file}")
 print("=" * 70)
 
 # Clear GPU cache
@@ -202,6 +250,30 @@ total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
 print(f"\nVideo info: {frame_width}x{frame_height} @ {fps}fps, {total_frames} frames")
 
+lwm2m_reporter = LwM2MSummaryReporter(
+    enabled=lwm2m_enable,
+    server_uri=lwm2m_server,
+    endpoint_name=lwm2m_endpoint,
+    device_id=lwm2m_device_id,
+    source=str(video_path),
+    threshold=lwm2m_threshold,
+    interval_sec=lwm2m_interval,
+    store_file=lwm2m_store_file,
+)
+
+if lwm2m_enable and not lwm2m_reporter.is_active():
+    print("[LWM2M] Disabled: set --lwm2m-server and ensure aiocoap is installed")
+elif lwm2m_reporter.is_active():
+    print(f"[LWM2M] Phase 1 summary reporter enabled: {lwm2m_server}")
+    print("[LWM2M] Reachability check uses ICMP ping when available, otherwise a UDP route probe")
+    print(f"[LWM2M] Ping check: {'reachable' if lwm2m_reporter.ping_server() else 'unreachable'}")
+    lwm2m_reporter.start()
+    startup_test_payload = lwm2m_reporter.build_test_payload()
+    if lwm2m_reporter.enqueue(startup_test_payload):
+        print("[LWM2M] Startup test payload queued")
+    else:
+        print("[LWM2M] Startup test payload not queued")
+
 # Setup video writer if needed
 video_writer = None
 if save_video:
@@ -226,6 +298,7 @@ frame_count = 0
 processed_count = 0
 detection_count = 0
 processing_failed = False
+last_lwm2m_time = time.time()
 
 try:
     while True:
@@ -334,6 +407,23 @@ try:
                   f"({100*frame_count/total_frames:.1f}%) - "
                   f"{len(detection_counts)} unique numbers detected")
 
+        if lwm2m_reporter.is_active():
+            now = time.time()
+            if now - last_lwm2m_time >= lwm2m_reporter.interval_sec:
+                summary_payload = lwm2m_reporter.build_summary_payload(
+                    counts=dict(detection_counts),
+                    frame_count=frame_count,
+                    processed_count=processed_count,
+                    detection_count=detection_count,
+                )
+                if summary_payload is not None and lwm2m_reporter.enqueue(summary_payload):
+                    lwm2m_stats = lwm2m_reporter.get_stats()
+                    print(
+                        f"[LWM2M] Summary queued | queue={lwm2m_stats['queue_depth']} "
+                        f"pending_disk={lwm2m_stats['pending_disk']}"
+                    )
+                last_lwm2m_time = now
+
 except KeyboardInterrupt:
     print("\n\nProcessing interrupted by user")
     processing_failed = True
@@ -343,6 +433,19 @@ except Exception as e:
     traceback.print_exc()
     processing_failed = True
 finally:
+    if lwm2m_reporter.is_active():
+        final_payload = lwm2m_reporter.build_summary_payload(
+            counts=dict(detection_counts),
+            frame_count=frame_count,
+            processed_count=processed_count,
+            detection_count=detection_count,
+        )
+        if final_payload is not None:
+            lwm2m_reporter.enqueue(final_payload)
+
+        print("[MAIN] Stopping LwM2M reporter...")
+        lwm2m_reporter.stop()
+
     # Cleanup
     cap.release()
     if video_writer:
@@ -353,6 +456,12 @@ print(f"Video processing completed!")
 print(f"Processed {processed_count} frames (total: {frame_count})")
 print(f"Total detections: {detection_count}")
 print(f"Unique numbers: {len(detection_counts)}")
+if lwm2m_reporter.is_active():
+    lwm2m_stats = lwm2m_reporter.get_stats()
+    print(
+        f"LwM2M sent: {lwm2m_stats['sent']} | failed: {lwm2m_stats['failed']} | "
+        f"queued: {lwm2m_stats['queued']} | pending_disk: {lwm2m_stats['pending_disk']}"
+    )
 print("=" * 70)
 
 if processing_failed:
