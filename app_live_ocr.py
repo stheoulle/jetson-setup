@@ -446,6 +446,8 @@ if lwm2m_enable and not lwm2m_reporter.is_active():
     print("[LWM2M] Disabled: set --lwm2m-server and ensure aiocoap is installed")
 elif lwm2m_reporter.is_active():
     print(f"[LWM2M] Phase 1 summary reporter enabled: {lwm2m_server}")
+    print("[LWM2M] Reachability check uses ICMP ping when available, otherwise a UDP route probe")
+    print(f"[LWM2M] Ping check: {'reachable' if lwm2m_reporter.ping_server() else 'unreachable'}")
     lwm2m_reporter.start()
 
 # =============================================================================

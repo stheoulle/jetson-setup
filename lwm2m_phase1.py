@@ -4,11 +4,15 @@
 import asyncio
 import json
 import queue
+import shutil
+import subprocess
+import socket
 import threading
 import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 try:
     import aiocoap
@@ -49,6 +53,8 @@ class LwM2MSummaryReporter:
         self.worker = None
         self.pending = deque(self._load_pending())
         self.last_reported_counts = {}
+        self.server_host = self._extract_server_host()
+        self.server_port = self._extract_server_port()
 
         self.sent_count = 0
         self.failed_count = 0
@@ -69,6 +75,55 @@ class LwM2MSummaryReporter:
         self.stop_event.set()
         if self.worker:
             self.worker.join(timeout=3)
+
+    def _extract_server_host(self):
+        if not self.server_uri:
+            return None
+
+        parsed = urlparse(self.server_uri)
+        if parsed.hostname:
+            return parsed.hostname
+
+        if "://" not in self.server_uri:
+            return self.server_uri.split(":", 1)[0]
+
+        return None
+
+    def _extract_server_port(self):
+        if not self.server_uri:
+            return 5683
+
+        parsed = urlparse(self.server_uri)
+        if parsed.port:
+            return parsed.port
+
+        return 5683
+
+    def ping_server(self, timeout_sec=1):
+        if not self.server_host:
+            return False
+
+        ping_bin = shutil.which("ping")
+        if not ping_bin:
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                    sock.settimeout(max(1, int(timeout_sec)))
+                    sock.connect((self.server_host, self.server_port))
+                    sock.send(b"\x00")
+                return True
+            except Exception:
+                return False
+
+        try:
+            result = subprocess.run(
+                [ping_bin, "-c", "1", "-W", str(max(1, int(timeout_sec))), self.server_host],
+                capture_output=True,
+                text=True,
+                timeout=max(2, int(timeout_sec) + 1),
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
 
     def build_summary_payload(self, counts, frame_count, processed_count, detection_count):
         eligible = []
@@ -177,6 +232,10 @@ class LwM2MSummaryReporter:
             self._persist_pending()
 
         while not self.stop_event.is_set():
+            if not self.ping_server():
+                time.sleep(self.retry_delay_sec)
+                continue
+
             payload = None
             payload_from_pending = False
 

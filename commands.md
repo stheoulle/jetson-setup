@@ -35,3 +35,15 @@ Run the vidéo inference on a smaller GPU that fallsbak to cpu if GPU is still n
 # Annotated output video with YOLO boxes and OCR labels
 ./inference_ocr_easy.sh vidéos/C0088.MP4 --save-video --output-video annotated.mp4
 ```
+
+To send count to the receiving server
+
+```bash
+./inference_live_ocr.sh imx477 \
+  --lwm2m-enable \
+  --lwm2m-server coap://192.168.1.7:5683/lwm2m/summary \
+  --lwm2m-endpoint jetson-ocr-01 \
+  --lwm2m-device-id jetson-01 \
+  --lwm2m-threshold 5 \
+  --lwm2m-interval 5
+```
