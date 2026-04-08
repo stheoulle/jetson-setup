@@ -212,6 +212,12 @@ if save_video:
     output_video_path.parent.mkdir(parents=True, exist_ok=True)
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     video_writer = cv2.VideoWriter(str(output_video_path), fourcc, fps, (frame_width, frame_height))
+    if not video_writer.isOpened():
+        print(
+            f"\nFailed to create output video: {output_video_path}\n"
+            "Please check that the output path is writable and that the selected codec is available."
+        )
+        sys.exit(1)
     print(f"Output video: {output_video_path}")
 
 print("\nStarting video processing with OCR...\n")
